@@ -120,7 +120,7 @@ def reg_model(x, y):
         "intercept_stderr"  : reg.intercept_stderr,
         "intercept_pvalue"  : 2 * stats.t.sf(np.abs(reg.intercept / reg.intercept_stderr), df = len(x) - 2),
         "rvalue"            : reg.rvalue,
-        "r_squared"         : reg.rvalue ** 2
+        "r_squared"         : reg.rvalue ** 2,
     }
 #===========================================================#
 # 3. CAPM
@@ -128,6 +128,8 @@ def reg_model(x, y):
 # --------- INDIVIDIUAL & MULTIPLE ASSET  CAPM ANALYTICS -------
 capm_regression_asset_list = []
 for model, weight in {'with_shorts': ef_w_shorts_weights, 'wo_shorts': ef_no_shorts_weights}.items():
+    print(model)
+    print(weight)
     x = jkse_return_df['^JKSE'].subtract(rf)
 
     w_array = np.array([weight[t] for t in ticker_list]).reshape((9, 1))
@@ -137,15 +139,22 @@ for model, weight in {'with_shorts': ef_w_shorts_weights, 'wo_shorts': ef_no_sho
     reg_dict = reg_model(x, y)
     reg_dict['model'] = model
 
+    #------- compute TR & ER
+    reg_dict['ER'] = float(log_return_df.dot(w_array).mean() - rf)
+    reg_dict['TR'] = float(reg_dict['ER'] / reg_dict['slope'])
+
     capm_regression_asset_list.append(reg_dict)
 
-capm_regression_asset_list = []
 for ticker in ticker_list:
     x = jkse_return_df['^JKSE'].subtract(rf)
     y = log_return_df[ticker].subtract(rf)
 
     reg_dict = reg_model(x, y)
     reg_dict['model'] = ticker
+
+    #------- compute TR & ER
+    reg_dict['ER'] = log_return_df[ticker].mean() - rf
+    reg_dict['TR'] = reg_dict['ER'] / reg_dict['slope']
 
     capm_regression_asset_list.append(reg_dict)
 
