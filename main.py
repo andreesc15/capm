@@ -197,3 +197,114 @@ for ticker in ticker_list:
 
 results_df = pd.DataFrame(capm_regression_asset_list)
 print(results_df)
+
+# =========================================================== #
+# Sensitivity Analysis
+# ----------------------------------------------------------- #
+avg_sigma = log_return_df.std().mean()
+vol_targets = np.linspace(-0.01, 0.5, 250)
+
+records_wo_shorts = []
+records_with_shorts = []
+for tv in vol_targets:
+    ef_with_shorts = EfficientFrontier(mu, S, weight_bounds=(-10, 10))
+    ef_wo_shorts = EfficientFrontier(mu, S, weight_bounds=(0, 1))
+
+    try:
+        w_with_shorts  = ef_with_shorts.efficient_return(target_return=tv)
+    except Exception as inst:
+        print(inst)
+        records_with_shorts.append(dict(
+            target_return = tv,
+            mu = np.nan,
+            sigma = np.nan,
+            sharpe = np.nan,
+            beta = np.nan,
+            alpha = np.nan,
+            ER = np.nan,
+            TR = np.nan))
+        continue
+    
+    try:
+        w_wo_shorts = ef_wo_shorts.efficient_return(target_return=tv)
+    except Exception as inst:
+        print(inst)
+        records_wo_shorts.append(dict(
+            target_return = tv,
+            mu = np.nan,
+            sigma = np.nan,
+            sharpe = np.nan,
+            beta = np.nan,
+            alpha = np.nan,
+            ER = np.nan,
+            TR = np.nan))
+        continue
+
+
+    ret_shorts, vol_shorts, sharpe_shorts = ef_with_shorts.portfolio_performance(risk_free_rate=rf, verbose=False)
+    ret_wo_shorts, vol_wo_shorts, sharpe_wo_shorts = ef_wo_shorts.portfolio_performance(risk_free_rate=rf, verbose=False)
+
+
+    # ---- get beta & alpha via regression against IHSG ----
+    w_shorts_array = np.array([w_with_shorts[t] for t in ticker_list]).reshape((len(ticker_list), 1))
+    port_ret_series_short = log_return_df.dot(w_shorts_array).squeeze()          # series
+    reg_shorts = reg_model(jkse_return_df['^JKSE'] - rf, port_ret_series_short - rf)                                           # your helper
+
+    w_wo_shorts_array = np.array([w_wo_shorts[t] for t in ticker_list]).reshape((len(ticker_list), 1))
+    port_ret_series_wo_short = log_return_df.dot(w_wo_shorts_array).squeeze()          # series
+    reg_wo_shorts = reg_model(jkse_return_df['^JKSE'] - rf, port_ret_series_wo_short - rf)                                           # your helper
+
+    records_with_shorts.append(dict(
+        target_return = tv,
+        mu = ret_shorts,
+        sigma = vol_shorts,
+        sharpe = sharpe_shorts,
+        beta = reg_shorts['slope'],
+        alpha = reg_shorts['intercept'],
+        ER = port_ret_series_short.mean(),
+        TR = port_ret_series_short.mean() / reg_shorts['slope'] if reg_shorts['slope'] != 0 else np.nan
+    ))
+
+    records_wo_shorts.append(dict(
+        target_return = tv,
+        mu = ret_wo_shorts,
+        sigma = vol_wo_shorts,
+        sharpe = sharpe_wo_shorts,
+        beta = reg_wo_shorts['slope'],
+        alpha = reg_wo_shorts['intercept'],
+        ER = port_ret_series_wo_short.mean(),
+        TR = port_ret_series_wo_short.mean() / reg_wo_shorts['slope'] if reg_wo_shorts['slope'] != 0 else np.nan
+    ))
+
+
+
+
+# ------------- convert to DF -------------
+df_vol_wo_shorts = pd.DataFrame(records_wo_shorts)
+df_vol_shorts = pd.DataFrame(records_with_shorts)
+
+# ------------- plot -------------
+fig, axs = plt.subplots(2, 3, figsize=(12, 10))
+axs = axs.flatten()
+cols = ['mu', 'sigma', 'sharpe', 'beta', 'alpha', 'TR']
+titles = ['μ', 'σ', 'Sharpe', 'β', 'Jensen α', 'Treynor']
+# Keep a list to collect all handles
+all_handles = []
+all_labels = []
+
+for ax, c, t in zip(axs, cols, titles):
+    h1, = ax.plot(df_vol_wo_shorts['target_return'], df_vol_wo_shorts[c], color = "blue")
+    h2, = ax.plot(df_vol_shorts['target_return'], df_vol_shorts[c], color = "red")
+    ax.set_xlabel('Target σ (%)')
+    ax.set_title(t)
+    ax.grid(True)
+    # Only collect once to avoid duplicates
+    if not all_labels:
+        all_handles.extend([h1, h2])
+        all_labels.extend(['No Shorts', 'With Shorts'])
+
+fig.legend(all_handles, all_labels, loc='upper right', ncol=2)
+
+plt.suptitle('Sensitivity of efficient_return to Target Return', fontsize=14)
+plt.tight_layout()
+plt.show()
