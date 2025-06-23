@@ -98,15 +98,43 @@ mu = log_return_df.mean()
 S = log_return_df.cov()
 
 rf = 0.05443326795 / 12 # 5.443326795% dari average INDONIA sesuai dengan periode, dijadikan MONTLY RATE karena datanya bulanan
-ef_no_shorts = EfficientFrontier(mu, S, weight_bounds=(0, 1))
-ef_no_shorts_weights = ef_no_shorts.max_sharpe(risk_free_rate=rf)
-print(ef_no_shorts_weights)
-print(ef_no_shorts.portfolio_performance(verbose=True, risk_free_rate=rf))
 
-ef_w_shorts = EfficientFrontier(mu, S, weight_bounds=(-10, 10))
-ef_w_shorts_weights = ef_w_shorts.max_sharpe(risk_free_rate=rf)
-print(ef_w_shorts_weights)
-print(ef_w_shorts.portfolio_performance(verbose=True, risk_free_rate=rf))
+
+delta       = 1.0                            # risk-aversion (for max_quadratic_utility)
+target_vol  = log_return_df.std().mean()     # simple target σ
+target_ret  = mu.mean()                      # simple target µ
+
+optimisers = {
+    "min_volatility"        : lambda ef: ef.min_volatility(),
+    "max_sharpe"            : lambda ef: ef.max_sharpe(risk_free_rate=rf),
+    "max_quadratic_utility" : lambda ef: ef.max_quadratic_utility(risk_aversion=delta),
+    "efficient_risk"        : lambda ef: ef.efficient_risk(target_volatility=target_vol),
+    "efficient_return"      : lambda ef: ef.efficient_return(target_return=target_ret),
+}
+
+bound_sets = {
+    "wo_shorts": (0, 1),
+    "with_shorts": (-10, 10),
+}
+
+opt_results  = {}   # FLAT  —>  { "max_sharpe_wo_shorts": weights, ... }
+perf_results = {}   # optional: same keys but (ret, vol, sharpe) tuples
+
+for b_label, bounds in bound_sets.items():
+    for opt_name, opt_fun in optimisers.items():
+        key = f"{opt_name}_{b_label}"
+        ef  = EfficientFrontier(mu, S, weight_bounds=bounds)
+        opt_results[key]  = opt_fun(ef)                          # store WEIGHTS dict
+        perf_results[key] = ef.portfolio_performance(            # (mu, sigma, Sharpe)
+                                verbose=False, risk_free_rate=rf)
+
+        # Console feedback (optional)
+        mu_, sigma_, sharpe_ = perf_results[key]
+        print(f"{key:<30}  μ={mu_:6.3%}  σ={sigma_:6.3%}  SR={sharpe_:5.2f}")
+
+# Keep the two explicit variables your CAPM loop expects
+ef_no_shorts_weights = opt_results["max_sharpe_wo_shorts"]
+ef_w_shorts_weights  = opt_results["max_sharpe_with_shorts"]
 
 #------ linear regression helper function
 def reg_model(x, y):
@@ -122,14 +150,23 @@ def reg_model(x, y):
         "rvalue"            : reg.rvalue,
         "r_squared"         : reg.rvalue ** 2,
     }
+# ---------- pretty printer for weight dictionaries ----------
+def weights_to_df(results_dict, tickers):
+    """
+    Convert {model: {ticker: weight, …}, …}  →  DataFrame
+    with models as rows and tickers as columns, rounded to 4 dp.
+    """
+    # Build DataFrame from the nested dict, re-index columns to desired order
+    df = pd.DataFrame(results_dict).T.reindex(columns=tickers)
+    return df.round(4)
+
+print(weights_to_df(opt_results, ticker_list))
 #===========================================================#
 # 3. CAPM
 #===========================================================#
 # --------- INDIVIDIUAL & MULTIPLE ASSET  CAPM ANALYTICS -------
 capm_regression_asset_list = []
-for model, weight in {'with_shorts': ef_w_shorts_weights, 'wo_shorts': ef_no_shorts_weights}.items():
-    print(model)
-    print(weight)
+for model, weight in opt_results.items():
     x = jkse_return_df['^JKSE'].subtract(rf)
 
     w_array = np.array([weight[t] for t in ticker_list]).reshape((9, 1))
